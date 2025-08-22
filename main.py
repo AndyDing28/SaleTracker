@@ -132,7 +132,9 @@ def resource_path(relative_path):
 
 def run_scheduler():
     schedule.every().day.at("21:00").do(send_combined_email)  # or use .at("21:00")
-    send_combined_email()  # Send immediately for testing
+    # Only send immediately if IMMEDIATE_SEND_ON_STARTUP is set to "true"
+    if os.getenv("IMMEDIATE_SEND_ON_STARTUP", "false").lower() == "true":
+        send_combined_email()
     while True:
         schedule.run_pending()
         time.sleep(1)
