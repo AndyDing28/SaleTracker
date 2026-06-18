@@ -267,7 +267,7 @@ def build_product_email_html(products):
     """Build HTML email body with product cards."""
     html_lines = [
         "<html><body style='margin: 0; padding: 0; font-family: Arial, sans-serif;'>",
-        "<h2 style='text-align: center;'>Here are your tracked products:</h2>",
+        "<h2 style='text-align: center;'>Here is your tracked product:</h2>",
     ]
 
     for product in products:
