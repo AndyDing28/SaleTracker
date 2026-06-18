@@ -26,6 +26,14 @@ logger = logging.getLogger(__name__)
 # Load environment variables
 load_dotenv()
 
+# Render kills HTTP requests after ~30 seconds — use shorter scrape timeouts there
+if os.getenv("RENDER"):
+    FETCH_TIMEOUT = (5, 15)
+    MAX_FETCH_RETRIES = 2
+else:
+    FETCH_TIMEOUT = (10, 30)
+    MAX_FETCH_RETRIES = 3
+
 # Initialize Flask app
 app = Flask(__name__)
 CORS(app)
@@ -57,9 +65,6 @@ REQUEST_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
 }
-
-FETCH_TIMEOUT = (10, 30)  # (connect seconds, read seconds)
-MAX_FETCH_RETRIES = 3
 
 def fetch_product_page(url):
     """Fetch a product page with browser-like headers."""
@@ -187,15 +192,34 @@ def parse_product_details(url, soup):
         return parse_nike(soup, url)
     return parse_lululemon(soup)
 
-def get_product_details():
+def get_product_details(force_refresh=False):
     """Fetch and parse product details. Returns a product dict."""
     try:
         if not product_state.link:
             raise ValueError("Product link not set")
 
+        if (
+            not force_refresh
+            and product_state.details.get("name")
+            and product_state.details.get("_cached_link") == product_state.link
+        ):
+            return {
+                "name": product_state.details["name"],
+                "current_price": product_state.details["current_price"],
+                "original_price": product_state.details.get("original_price"),
+                "on_sale": product_state.details.get("on_sale", False),
+                "image": product_state.details.get("image", ""),
+            }
+
         response = fetch_product_page(product_state.link)
         soup = BeautifulSoup(response.content, 'html.parser')
-        return parse_product_details(product_state.link, soup)
+        product = parse_product_details(product_state.link, soup)
+        product_state.details = {
+            **product,
+            "price": product["current_price"],
+            "_cached_link": product_state.link,
+        }
+        return product
     except requests.HTTPError as e:
         status = e.response.status_code if e.response is not None else "unknown"
         logger.error(f"Error fetching product details: {str(e)}")
@@ -288,7 +312,6 @@ def send_email(recipient_email):
         logger.info(f"Fetching product details for link: {product_state.link}")
         product = get_product_details()
         product['link'] = product_state.link
-        product_state.details = {**product, 'price': product['current_price']}
 
         logger.info(f"Product details fetched: {product_state.details}")
 
@@ -359,10 +382,54 @@ def schedule_email():
             
         return jsonify({
             'message': 'Email sent successfully and scheduled for daily updates',
-            'product': product_state.details
+            'product': public_product_details(),
         }), 200
     except Exception as e:
         logger.error(f"Error scheduling email: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+def public_product_details():
+    """Product details for API responses (omit internal cache keys)."""
+    return {k: v for k, v in product_state.details.items() if not k.startswith('_')}
+
+@app.route('/track-product', methods=['POST'])
+@limiter.limit("5 per minute")
+def track_product():
+    """Update link, scrape once, send email, and schedule — single request for Render."""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+
+        recipient_email = data.get('recipient_email')
+        product_link = data.get('productLink')
+
+        if not recipient_email or not validate_email(recipient_email):
+            return jsonify({'error': 'Invalid email address'}), 400
+        if not product_link or not validate_url(product_link):
+            return jsonify({'error': 'Invalid product link'}), 400
+
+        product_state.link = product_link
+        product_state.details.clear()
+        get_product_details(force_refresh=True)
+
+        try:
+            send_email(recipient_email)
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 400
+        except Exception as e:
+            return jsonify({'error': f"Failed to send email: {str(e)}"}), 500
+
+        if not scheduler.running:
+            scheduler.add_job(send_email, 'cron', hour=15, minute=23, args=[recipient_email])
+            scheduler.start()
+
+        return jsonify({
+            'message': 'Email sent successfully and scheduled for daily updates',
+            'product': public_product_details(),
+        }), 200
+    except Exception as e:
+        logger.error(f"Error tracking product: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/update-product-link', methods=['POST'])
@@ -380,9 +447,9 @@ def update_product_link():
 
         product_state.link = new_link
         product_state.details.clear()
-        
-        # Test the link immediately
-        get_product_details()
+
+        # Test the link immediately (also caches details for the email step)
+        get_product_details(force_refresh=True)
         
         return jsonify({'message': 'Product link updated successfully'}), 200
     except Exception as e:

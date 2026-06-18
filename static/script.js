@@ -1,15 +1,10 @@
-function scrollToContent() {
-  const contentElement = document.querySelector("#content");
-  contentElement.scrollIntoView({ behavior: "smooth" });
-}
-
-let mybutton = document.getElementById("myBtn");
-
-window.onscroll = function () {
-  scrollFunction();
-};
+const SUBMIT_LABEL = "TRACK PRODUCT";
 
 function scrollFunction() {
+  const mybutton = document.getElementById("button");
+  if (!mybutton) {
+    return;
+  }
   if (document.body.scrollTop > 20 || document.documentElement.scrollTop > 20) {
     mybutton.style.display = "block";
   } else {
@@ -22,43 +17,72 @@ function topFunction() {
   document.documentElement.scrollTo({ top: 0, behavior: "smooth" });
 }
 
-// Show loading state
 function showLoading() {
   const submitButton = document.querySelector('button[type="submit"]');
+  if (!submitButton) {
+    return;
+  }
   submitButton.disabled = true;
-  submitButton.innerHTML = 'Processing...';
+  submitButton.textContent = "Processing...";
 }
 
-// Hide loading state
 function hideLoading() {
   const submitButton = document.querySelector('button[type="submit"]');
+  if (!submitButton) {
+    return;
+  }
   submitButton.disabled = false;
-  submitButton.innerHTML = 'Submit';
+  submitButton.textContent = SUBMIT_LABEL;
 }
 
-// Show error message
 function showError(message) {
-  const errorDiv = document.getElementById('error-message');
+  const errorDiv = document.getElementById("error-message");
+  if (!errorDiv) {
+    return;
+  }
   errorDiv.textContent = message;
-  errorDiv.style.display = 'block';
+  errorDiv.style.display = "block";
   setTimeout(() => {
-    errorDiv.style.display = 'none';
-  }, 5000);
+    errorDiv.style.display = "none";
+  }, 15000);
 }
 
-// Show success message
 function showSuccess(message) {
-  const successDiv = document.getElementById('success-message');
+  const successDiv = document.getElementById("success-message");
+  if (!successDiv) {
+    return;
+  }
   successDiv.textContent = message;
-  successDiv.style.display = 'block';
+  successDiv.style.display = "block";
   setTimeout(() => {
-    successDiv.style.display = 'none';
-  }, 10000); // milliseconds — 10000 = 10 seconds
+    successDiv.style.display = "none";
+  }, 10000);
 }
 
-document
-  .getElementById("combinedForm")
-  .addEventListener("submit", async function (event) {
+async function readJsonResponse(response) {
+  const text = await response.text();
+  if (!text) {
+    if (response.status === 502 || response.status === 504) {
+      throw new Error("Server timed out. Try again — use a full Nike URL.");
+    }
+    throw new Error("Empty response from server. Try again in a moment.");
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error("Unexpected server response. Try again.");
+  }
+}
+
+document.addEventListener("DOMContentLoaded", function () {
+  window.addEventListener("scroll", scrollFunction);
+
+  const form = document.getElementById("combinedForm");
+  if (!form) {
+    return;
+  }
+
+  form.addEventListener("submit", async function (event) {
     event.preventDefault();
     showLoading();
 
@@ -66,78 +90,60 @@ document
     const productLink = document.getElementById("productLink").value;
 
     try {
-      // First update the product link
-      const updateResponse = await fetch("/update-product-link", {
+      const response = await fetch("/track-product", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ productLink: productLink }),
+        body: JSON.stringify({
+          recipient_email: recipient_email,
+          productLink: productLink,
+        }),
       });
 
-      const updateData = await updateResponse.json();
+      const data = await readJsonResponse(response);
 
-      if (!updateResponse.ok) {
-        throw new Error(updateData.error || "Error updating product link");
+      if (!response.ok) {
+        throw new Error(data.error || "Error tracking product");
       }
 
-      // Then schedule the email
-      const emailResponse = await fetch("/schedule-email", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ recipient_email: recipient_email }),
-      });
-
-      const emailData = await emailResponse.json();
-
-      if (!emailResponse.ok) {
-        throw new Error(emailData.error || "Error scheduling email");
-      }
-
-      // Show success message with product details
-      const productDetails = emailData.product;
-      const priceLine = productDetails.on_sale && productDetails.original_price
-        ? `Was ${productDetails.original_price} → Now ${productDetails.current_price} (On sale!)`
-        : `Price: ${productDetails.price} · Not on sale`;
-      const successMessage = `
-        Email sent successfully!
-        Product: ${productDetails.name}
-        ${priceLine}
-        You will now receive daily updates at 3:23 PM.
-      `;
+      const productDetails = data.product;
+      const priceLine =
+        productDetails.on_sale && productDetails.original_price
+          ? `Was ${productDetails.original_price} → Now ${productDetails.current_price} (On sale!)`
+          : `Price: ${productDetails.price} · Not on sale`;
+      const successMessage = `Email sent successfully! Product: ${productDetails.name} ${priceLine} You will now receive daily updates at 3:23 PM.`;
       showSuccess(successMessage);
       event.target.reset();
     } catch (error) {
       console.error("Error:", error);
-      showError(error.message);
+      showError(
+        error.message ||
+          "Request failed. If this is the live site, wait a moment and try again."
+      );
     } finally {
       hideLoading();
     }
   });
 
-// Dropdown functionality
-document.addEventListener('DOMContentLoaded', function() {
-    const dropdown = document.querySelector('.dropdown');
-    const dropdownContent = document.querySelector('.dropdown-content');
-    const aboutUs = document.querySelector('.about-us');
+  const dropdown = document.querySelector(".dropdown");
+  const dropdownContent = document.querySelector(".dropdown-content");
+  const aboutUs = document.querySelector(".about-us");
 
-    // Toggle dropdown on click
-    aboutUs.addEventListener('click', function(e) {
-        e.stopPropagation();
-        dropdownContent.classList.toggle('show');
+  if (aboutUs && dropdown && dropdownContent) {
+    aboutUs.addEventListener("click", function (e) {
+      e.stopPropagation();
+      dropdownContent.classList.toggle("show");
     });
 
-    // Close dropdown when clicking outside
-    document.addEventListener('click', function(e) {
-        if (!dropdown.contains(e.target)) {
-            dropdownContent.classList.remove('show');
-        }
+    document.addEventListener("click", function (e) {
+      if (!dropdown.contains(e.target)) {
+        dropdownContent.classList.remove("show");
+      }
     });
 
-    // Prevent dropdown from closing when clicking inside it
-    dropdownContent.addEventListener('click', function(e) {
-        e.stopPropagation();
+    dropdownContent.addEventListener("click", function (e) {
+      e.stopPropagation();
     });
+  }
 });
