@@ -53,7 +53,7 @@ function showSuccess(message) {
   successDiv.style.display = 'block';
   setTimeout(() => {
     successDiv.style.display = 'none';
-  }, 5000);
+  }, 10000); // milliseconds — 10000 = 10 seconds
 }
 
 document
@@ -98,12 +98,14 @@ document
 
       // Show success message with product details
       const productDetails = emailData.product;
+      const priceLine = productDetails.on_sale && productDetails.original_price
+        ? `Was ${productDetails.original_price} → Now ${productDetails.current_price} (On sale!)`
+        : `Price: ${productDetails.price} · Not on sale`;
       const successMessage = `
-        Email sent successfully! 
+        Email sent successfully!
         Product: ${productDetails.name}
-        Price: ${productDetails.price}
-        On Sale: ${productDetails.sale ? 'Yes' : 'No'}
-        You will receive daily updates at 3:23 PM.
+        ${priceLine}
+        You will now receive daily updates at 3:23 PM.
       `;
       showSuccess(successMessage);
       event.target.reset();

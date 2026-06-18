@@ -20,5 +20,5 @@ EXPOSE 5000
 ENV PYTHONUNBUFFERED=1
 ENV FLASK_APP=app.py
 
-# Run the application with Gunicorn
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "app:app"] 
+# Run the application with Gunicorn (PORT is set by Render/Heroku/etc.)
+CMD gunicorn --bind 0.0.0.0:${PORT:-5000} --workers 1 app:app 

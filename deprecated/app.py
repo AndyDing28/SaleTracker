@@ -6,6 +6,7 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from apscheduler.schedulers.background import BackgroundScheduler
+import json
 import os
 import requests
 from bs4 import BeautifulSoup
@@ -47,6 +48,39 @@ class ProductState:
 
 product_state = ProductState()
 
+REQUEST_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/131.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+FETCH_TIMEOUT = (10, 30)  # (connect seconds, read seconds)
+MAX_FETCH_RETRIES = 3
+
+def fetch_product_page(url):
+    """Fetch a product page with browser-like headers."""
+    session = requests.Session()
+    session.headers.update(REQUEST_HEADERS)
+    if "lululemon.com" in url:
+        session.get("https://shop.lululemon.com/", timeout=FETCH_TIMEOUT)
+        session.headers["Referer"] = "https://shop.lululemon.com/"
+
+    last_error = None
+    for attempt in range(1, MAX_FETCH_RETRIES + 1):
+        try:
+            response = session.get(url, timeout=FETCH_TIMEOUT)
+            response.raise_for_status()
+            return response
+        except (requests.Timeout, requests.ConnectionError) as e:
+            last_error = e
+            logger.warning(f"Fetch attempt {attempt}/{MAX_FETCH_RETRIES} failed: {e}")
+
+    raise last_error
+
 def validate_email(email):
     """Validate email format"""
     pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
@@ -60,53 +94,184 @@ def validate_url(url):
     except:
         return False
 
+def parse_lululemon(soup):
+    name_element = soup.find("meta", attrs={'property': 'og:title'})
+    if not name_element:
+        raise ValueError("Product name not found")
+
+    image_element = soup.find('meta', property='og:image')
+    image = image_element.get('content', '') if image_element else ''
+
+    original_el = soup.find('span', class_='original-price')
+    discounted_el = soup.find('span', class_='discounted-price')
+    price_el = soup.find('span', class_='price')
+
+    if original_el and discounted_el:
+        return {
+            'name': name_element.get("content"),
+            'current_price': discounted_el.get_text(strip=True),
+            'original_price': original_el.get_text(strip=True),
+            'on_sale': True,
+            'image': image,
+        }
+
+    if not price_el:
+        raise ValueError("Price not found")
+
+    return {
+        'name': name_element.get("content"),
+        'current_price': price_el.get_text(strip=True),
+        'original_price': None,
+        'on_sale': False,
+        'image': image,
+    }
+
+def _nike_product(name, price, image, original_price=None):
+    current_price = f"${price} USD"
+    original = f"${original_price} USD" if original_price is not None else None
+    return {
+        'name': name,
+        'current_price': current_price,
+        'original_price': original,
+        'on_sale': original is not None,
+        'image': image or '',
+    }
+
+def _nike_prices_from_offers(offers):
+    price = offers.get("price")
+    original_price = offers.get("compareAtPrice") or offers.get("wasPrice")
+    return price, original_price
+
+def parse_nike(soup, url):
+    json_ld = soup.find("script", type="application/ld+json")
+    if not json_ld:
+        raise ValueError("Product data not found on Nike page")
+
+    data = json.loads(json_ld.string)
+    items = data if isinstance(data, list) else [data]
+    normalized_url = url.rstrip("/")
+    image_element = soup.find('meta', property='og:image')
+    image = image_element.get('content', '') if image_element else ''
+
+    for item in items:
+        if item.get("@type") == "ProductGroup":
+            name = item.get("name", "Product name not found")
+            variants = item.get("hasVariant") or []
+
+            for variant in variants:
+                offer_url = variant.get("offers", {}).get("url", "").rstrip("/")
+                if normalized_url in offer_url or offer_url in normalized_url:
+                    price, original_price = _nike_prices_from_offers(variant.get("offers", {}))
+                    if price is not None:
+                        return _nike_product(
+                            name, price, variant.get("image") or image, original_price
+                        )
+
+            for variant in variants:
+                price, original_price = _nike_prices_from_offers(variant.get("offers", {}))
+                if price is not None:
+                    return _nike_product(
+                        name, price, variant.get("image") or image, original_price
+                    )
+
+        if item.get("@type") == "Product":
+            name = item.get("name", "Product name not found")
+            price, original_price = _nike_prices_from_offers(item.get("offers", {}))
+            if price is not None:
+                return _nike_product(name, price, item.get("image") or image, original_price)
+
+    raise ValueError("Price not found on Nike page")
+
+def parse_product_details(url, soup):
+    if "nike.com" in url:
+        return parse_nike(soup, url)
+    return parse_lululemon(soup)
+
 def get_product_details():
-    """Get product details with error handling"""
+    """Fetch and parse product details. Returns a product dict."""
     try:
         if not product_state.link:
             raise ValueError("Product link not set")
-            
-        response = requests.get(product_state.link, timeout=10)
-        response.raise_for_status()
+
+        response = fetch_product_page(product_state.link)
         soup = BeautifulSoup(response.content, 'html.parser')
-        
-        name_element = soup.find("meta", attrs={'property': 'og:title'})
-        price_element = soup.find('span', class_='price')
-        
-        if not name_element:
-            raise ValueError("Product name not found")
-        if not price_element:
-            raise ValueError("Price not found")
-            
-        product_name = name_element.get("content")
-        product_price = price_element.get_text().strip()
-        
-        return product_name, product_price
+        return parse_product_details(product_state.link, soup)
+    except requests.HTTPError as e:
+        status = e.response.status_code if e.response is not None else "unknown"
+        logger.error(f"Error fetching product details: {str(e)}")
+        raise ValueError(
+            f"The store blocked this request (HTTP {status}). "
+            "Lululemon often blocks automated requests — try a Nike link to test, "
+            "or run the app from a personal network instead of work Wi‑Fi/VPN."
+        ) from e
+    except requests.Timeout as e:
+        logger.error(f"Error fetching product details: {str(e)}")
+        raise ValueError(
+            "The store took too long to respond. Check your connection and try again, "
+            "or make sure you pasted the full product URL."
+        ) from e
     except requests.RequestException as e:
         logger.error(f"Error fetching product details: {str(e)}")
-        raise
+        raise ValueError(f"Could not reach the product page: {e}") from e
     except Exception as e:
         logger.error(f"Unexpected error in get_product_details: {str(e)}")
         raise
 
-def get_product_sales():
-    """Check if product is on sale with error handling"""
-    try:
-        if not product_state.link:
-            raise ValueError("Product link not set")
-            
-        response = requests.get(product_state.link, timeout=10)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.content, 'html.parser')
+def format_price_html(product):
+    """Format price line for email — strikethrough original + sale price when on sale."""
+    if product.get('on_sale') and product.get('original_price'):
+        return f"""
+                    <p>
+                        <span style="text-decoration: line-through; color: #888;">{product['original_price']}</span>
+                        <span style="color: #00c853; font-weight: bold; font-size: 1.2em;"> {product['current_price']}</span>
+                    </p>
+                    <p style="color: #d32f2f; font-weight: bold; margin: 0;">ON SALE</p>"""
+    return f"""
+                    <p style="font-size: 1.2em; font-weight: bold; margin: 0;">
+                        {product['current_price']}
+                        <span style="color: #666; font-size: 0.85em; font-weight: bold;"> · NOT ON SALE</span>
+                    </p>"""
 
-        sale_label = soup.find('div', class_='sale-label')
-        original_price_element = soup.find('span', class_='original-price')
-        discounted_price_element = soup.find('span', class_='discounted-price')
+def email_subject_for_product(product):
+    if product.get('on_sale') and product.get('original_price'):
+        current = product['current_price'].replace('USD', '').strip()
+        original = product['original_price'].replace('USD', '').strip()
+        return f"{current} / {original} – Your Tracked Products"
+    return f"{product['current_price'].replace('USD', '').strip()} – Your Tracked Products"
 
-        return bool(sale_label or (original_price_element and discounted_price_element))
-    except Exception as e:
-        logger.error(f"Error checking product sales: {str(e)}")
-        return False
+def build_product_email_html(products):
+    """Build HTML email body with product cards."""
+    html_lines = [
+        "<html><body style='margin: 0; padding: 0; font-family: Arial, sans-serif;'>",
+        "<h2 style='text-align: center;'>Here are your tracked products:</h2>",
+    ]
+
+    for product in products:
+        price_html = format_price_html(product)
+        link = product['link']
+        name = product['name']
+        image = product['image']
+        card = f"""
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center"
+               style="border: 1px solid #ccc; max-width: 400px; width: 100%; margin: 0 auto 20px;">
+          <tr>
+            <td style="padding: 20px; text-align: center;">
+              <h2 style="margin: 0 0 12px; font-size: 20px; color: #111;">
+                <a href="{link}" target="_blank" style="text-decoration: none; color: #111;">{name}</a>
+              </h2>
+              {price_html}
+              <a href="{link}" target="_blank" style="text-decoration: none; display: block; margin-top: 16px;">
+                <img src="{image}" alt="{name}"
+                     style="display: block; max-width: 200px; width: 100%; height: auto; margin: 0 auto; border: none;" />
+              </a>
+            </td>
+          </tr>
+        </table>
+        """
+        html_lines.append(card)
+
+    html_lines.append("</body></html>")
+    return "\n".join(html_lines)
 
 def send_email(recipient_email):
     """Send email with error handling"""
@@ -121,24 +286,19 @@ def send_email(recipient_email):
             raise ValueError("Please set a product link first")
 
         logger.info(f"Fetching product details for link: {product_state.link}")
-        product_state.details['name'], product_state.details['price'] = get_product_details()
-        product_state.details['sale'] = get_product_sales()
-        
+        product = get_product_details()
+        product['link'] = product_state.link
+        product_state.details = {**product, 'price': product['current_price']}
+
         logger.info(f"Product details fetched: {product_state.details}")
 
         message = MIMEMultipart()
         message['From'] = sender_email
         message['To'] = recipient_email
-        message['Subject'] = f'Product Update: {product_state.details["name"]}'
-        
-        body = f"""
-        Product: {product_state.details['name']}
-        Current Price: {product_state.details['price']}
-        On Sale: {'Yes' if product_state.details['sale'] else 'No'}
-        Check it out here: {product_state.link}
-        """
-        
-        message.attach(MIMEText(body, 'plain'))
+        message['Subject'] = email_subject_for_product(product)
+
+        html_body = build_product_email_html([product])
+        message.attach(MIMEText(html_body, 'html'))
 
         logger.info(f"Attempting to send email to {recipient_email}")
         with smtplib.SMTP('smtp.gmail.com', 587) as server:
