@@ -63,7 +63,9 @@ async function readJsonResponse(response) {
   const text = await response.text();
   if (!text) {
     if (response.status === 502 || response.status === 504) {
-      throw new Error("Server timed out. Try again — use a full Nike URL.");
+      throw new Error(
+        "Server timed out (Render free tier). Wait 30 seconds and try again."
+      );
     }
     throw new Error("Empty response from server. Try again in a moment.");
   }
@@ -86,41 +88,51 @@ document.addEventListener("DOMContentLoaded", function () {
     event.preventDefault();
     showLoading();
 
-    const recipient_email = document.getElementById("email").value;
-    const productLink = document.getElementById("productLink").value;
+    const recipient_email = document.getElementById("email").value.trim();
+    const productLink = document.getElementById("productLink").value.trim();
 
     try {
-      const response = await fetch("/track-product", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          recipient_email: recipient_email,
-          productLink: productLink,
-        }),
-      });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 28000);
 
-      const data = await readJsonResponse(response);
+      try {
+        const response = await fetch("/track-product", {
+          signal: controller.signal,
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            recipient_email: recipient_email,
+            productLink: productLink,
+          }),
+        });
 
-      if (!response.ok) {
-        throw new Error(data.error || "Error tracking product");
+        const data = await readJsonResponse(response);
+
+        if (!response.ok) {
+          throw new Error(data.error || "Error tracking product");
+        }
+
+        const productDetails = data.product;
+        const priceLine =
+          productDetails.on_sale && productDetails.original_price
+            ? `Was ${productDetails.original_price} → Now ${productDetails.current_price} (On sale!)`
+            : `Price: ${productDetails.price} · Not on sale`;
+        const successMessage = `Tracking started! Product: ${productDetails.name} ${priceLine} First email arriving shortly. Daily updates at 3:23 PM.`;
+        showSuccess(successMessage);
+        event.target.reset();
+      } finally {
+        clearTimeout(timeoutId);
       }
-
-      const productDetails = data.product;
-      const priceLine =
-        productDetails.on_sale && productDetails.original_price
-          ? `Was ${productDetails.original_price} → Now ${productDetails.current_price} (On sale!)`
-          : `Price: ${productDetails.price} · Not on sale`;
-      const successMessage = `Email sent successfully! Product: ${productDetails.name} ${priceLine} You will now receive daily updates at 3:23 PM.`;
-      showSuccess(successMessage);
-      event.target.reset();
     } catch (error) {
       console.error("Error:", error);
-      showError(
-        error.message ||
-          "Request failed. If this is the live site, wait a moment and try again."
-      );
+      const message =
+        error.name === "AbortError"
+          ? "Request timed out. The server may be waking up — wait 30 seconds and try again."
+          : error.message ||
+            "Request failed. If this is the live site, wait a moment and try again.";
+      showError(message);
     } finally {
       hideLoading();
     }

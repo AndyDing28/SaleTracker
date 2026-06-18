@@ -15,6 +15,7 @@ import logging
 import re
 from urllib.parse import urlparse
 import atexit
+import threading
 
 # Configure logging
 logging.basicConfig(
@@ -26,10 +27,10 @@ logger = logging.getLogger(__name__)
 # Load environment variables
 load_dotenv()
 
-# Render kills HTTP requests after ~30 seconds — use shorter scrape timeouts there
+# Render kills HTTP requests after ~30 seconds — one fast attempt, email runs in background
 if os.getenv("RENDER"):
-    FETCH_TIMEOUT = (5, 15)
-    MAX_FETCH_RETRIES = 2
+    FETCH_TIMEOUT = (5, 18)
+    MAX_FETCH_RETRIES = 1
 else:
     FETCH_TIMEOUT = (10, 30)
     MAX_FETCH_RETRIES = 3
@@ -231,8 +232,7 @@ def get_product_details(force_refresh=False):
     except requests.Timeout as e:
         logger.error(f"Error fetching product details: {str(e)}")
         raise ValueError(
-            "The store took too long to respond. Check your connection and try again, "
-            "or make sure you pasted the full product URL."
+            "The store took too long to respond. Wait a moment and try again."
         ) from e
     except requests.RequestException as e:
         logger.error(f"Error fetching product details: {str(e)}")
@@ -297,7 +297,7 @@ def build_product_email_html(products):
     html_lines.append("</body></html>")
     return "\n".join(html_lines)
 
-def send_email(recipient_email):
+def send_email(recipient_email, force_refresh=False):
     """Send email with error handling"""
     try:
         sender_email = os.environ.get('SENDER_EMAIL')
@@ -310,7 +310,7 @@ def send_email(recipient_email):
             raise ValueError("Please set a product link first")
 
         logger.info(f"Fetching product details for link: {product_state.link}")
-        product = get_product_details()
+        product = get_product_details(force_refresh=force_refresh)
         product['link'] = product_state.link
 
         logger.info(f"Product details fetched: {product_state.details}")
@@ -341,6 +341,16 @@ def send_email(recipient_email):
         logger.error(f"Error sending email: {str(e)}")
         raise ValueError(f"Unexpected error: {str(e)}")
 
+def send_email_background(recipient_email, force_refresh=False):
+    """Send email without blocking the HTTP response (Render 30s limit)."""
+    def _run():
+        try:
+            send_email(recipient_email, force_refresh=force_refresh)
+        except Exception as e:
+            logger.error(f"Background email failed for {recipient_email}: {e}")
+
+    threading.Thread(target=_run, daemon=True).start()
+
 @app.route('/')
 def home():
     """Homepage route"""
@@ -367,17 +377,14 @@ def schedule_email():
         if not product_state.link:
             return jsonify({'error': 'Please set a product link first'}), 400
 
-        # Send a test email immediately
-        try:
-            send_email(recipient_email)
-        except ValueError as e:
-            return jsonify({'error': str(e)}), 400
-        except Exception as e:
-            return jsonify({'error': f"Failed to send email: {str(e)}"}), 500
+        get_product_details(force_refresh=True)
+        send_email_background(recipient_email)
 
-        # Schedule the email
         if not scheduler.running:
-            scheduler.add_job(send_email, 'cron', hour=15, minute=23, args=[recipient_email])
+            scheduler.add_job(
+                send_email, 'cron', hour=15, minute=23,
+                kwargs={'recipient_email': recipient_email, 'force_refresh': True},
+            )
             scheduler.start()
             
         return jsonify({
@@ -406,6 +413,7 @@ def track_product():
 
         if not recipient_email or not validate_email(recipient_email):
             return jsonify({'error': 'Invalid email address'}), 400
+        product_link = (product_link or "").strip()
         if not product_link or not validate_url(product_link):
             return jsonify({'error': 'Invalid product link'}), 400
 
@@ -413,19 +421,17 @@ def track_product():
         product_state.details.clear()
         get_product_details(force_refresh=True)
 
-        try:
-            send_email(recipient_email)
-        except ValueError as e:
-            return jsonify({'error': str(e)}), 400
-        except Exception as e:
-            return jsonify({'error': f"Failed to send email: {str(e)}"}), 500
+        send_email_background(recipient_email)
 
         if not scheduler.running:
-            scheduler.add_job(send_email, 'cron', hour=15, minute=23, args=[recipient_email])
+            scheduler.add_job(
+                send_email, 'cron', hour=15, minute=23,
+                kwargs={'recipient_email': recipient_email, 'force_refresh': True},
+            )
             scheduler.start()
 
         return jsonify({
-            'message': 'Email sent successfully and scheduled for daily updates',
+            'message': 'Product tracked! Check your inbox in a minute for the first update.',
             'product': public_product_details(),
         }), 200
     except Exception as e:
