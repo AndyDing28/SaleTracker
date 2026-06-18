@@ -349,7 +349,24 @@ def send_email_background(recipient_email, force_refresh=False):
         except Exception as e:
             logger.error(f"Background email failed for {recipient_email}: {e}")
 
-    threading.Thread(target=_run, daemon=True).start()
+    threading.Thread(target=_run, daemon=False).start()
+
+def _track_product_background(recipient_email, product_link):
+    """Scrape, email, and schedule — runs after an immediate 202 on Render."""
+    try:
+        product_state.link = product_link
+        product_state.details.clear()
+        get_product_details(force_refresh=True)
+        send_email(recipient_email)
+        if not scheduler.running:
+            scheduler.add_job(
+                send_email, 'cron', hour=15, minute=23,
+                kwargs={'recipient_email': recipient_email, 'force_refresh': True},
+            )
+            scheduler.start()
+        logger.info(f"Background track complete for {recipient_email}")
+    except Exception as e:
+        logger.error(f"Background track failed for {recipient_email}: {e}")
 
 @app.route('/')
 def home():
@@ -416,6 +433,20 @@ def track_product():
         product_link = (product_link or "").strip()
         if not product_link or not validate_url(product_link):
             return jsonify({'error': 'Invalid product link'}), 400
+
+        # Render free tier kills requests after ~30s — respond immediately, finish in background
+        if os.getenv("RENDER"):
+            threading.Thread(
+                target=_track_product_background,
+                args=(recipient_email, product_link),
+                daemon=False,
+            ).start()
+            return jsonify({
+                'message': (
+                    'Tracking started! Check your inbox in 1–2 minutes for the first update.'
+                ),
+                'async': True,
+            }), 202
 
         product_state.link = product_link
         product_state.details.clear()

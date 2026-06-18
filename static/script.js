@@ -56,7 +56,20 @@ function showSuccess(message) {
   successDiv.style.display = "block";
   setTimeout(() => {
     successDiv.style.display = "none";
-  }, 10000);
+  }, 12000);
+}
+
+function setServerStatus(message, visible) {
+  const statusDiv = document.getElementById("server-status");
+  const submitButton = document.querySelector('button[type="submit"]');
+  if (!statusDiv) {
+    return;
+  }
+  statusDiv.textContent = message;
+  statusDiv.style.display = visible ? "block" : "none";
+  if (submitButton) {
+    submitButton.disabled = visible;
+  }
 }
 
 async function readJsonResponse(response) {
@@ -64,7 +77,7 @@ async function readJsonResponse(response) {
   if (!text) {
     if (response.status === 502 || response.status === 504) {
       throw new Error(
-        "Server timed out (Render free tier). Wait 30 seconds and try again."
+        "Server timed out. Refresh the page, wait for 'Ready', then try again."
       );
     }
     throw new Error("Empty response from server. Try again in a moment.");
@@ -76,8 +89,34 @@ async function readJsonResponse(response) {
   }
 }
 
+async function warmUpServer() {
+  setServerStatus(
+    "Starting server (first visit can take up to a minute on free hosting)...",
+    true
+  );
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 90000);
+
+  try {
+    const response = await fetch("/health", { signal: controller.signal });
+    if (!response.ok) {
+      throw new Error("Server not ready");
+    }
+    setServerStatus("", false);
+  } catch {
+    setServerStatus(
+      "Server is still waking up — you can try submitting, or refresh in 30 seconds.",
+      false
+    );
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 document.addEventListener("DOMContentLoaded", function () {
   window.addEventListener("scroll", scrollFunction);
+  warmUpServer();
 
   const form = document.getElementById("combinedForm");
   if (!form) {
@@ -92,47 +131,46 @@ document.addEventListener("DOMContentLoaded", function () {
     const productLink = document.getElementById("productLink").value.trim();
 
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 28000);
+      const response = await fetch("/track-product", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          recipient_email: recipient_email,
+          productLink: productLink,
+        }),
+      });
 
-      try {
-        const response = await fetch("/track-product", {
-          signal: controller.signal,
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            recipient_email: recipient_email,
-            productLink: productLink,
-          }),
-        });
+      const data = await readJsonResponse(response);
 
-        const data = await readJsonResponse(response);
-
-        if (!response.ok) {
-          throw new Error(data.error || "Error tracking product");
-        }
-
-        const productDetails = data.product;
-        const priceLine =
-          productDetails.on_sale && productDetails.original_price
-            ? `Was ${productDetails.original_price} → Now ${productDetails.current_price} (On sale!)`
-            : `Price: ${productDetails.price} · Not on sale`;
-        const successMessage = `Email sent! Product: ${productDetails.name} ${priceLine} Daily updates at 3:23 PM.`;
-        showSuccess(successMessage);
+      if (response.status === 202 || data.async) {
+        showSuccess(
+          `${data.message} Daily updates at 3:23 PM. Check spam if you don't see it.`
+        );
         event.target.reset();
-      } finally {
-        clearTimeout(timeoutId);
+        return;
       }
+
+      if (!response.ok) {
+        throw new Error(data.error || "Error tracking product");
+      }
+
+      const productDetails = data.product;
+      const priceLine =
+        productDetails.on_sale && productDetails.original_price
+          ? `Was ${productDetails.original_price} → Now ${productDetails.current_price} (On sale!)`
+          : `Price: ${productDetails.price} · Not on sale`;
+      showSuccess(
+        `Email sent! Product: ${productDetails.name} ${priceLine} Daily updates at 3:23 PM.`
+      );
+      event.target.reset();
     } catch (error) {
       console.error("Error:", error);
-      const message =
-        error.name === "AbortError"
-          ? "Request timed out. The server may be waking up — wait 30 seconds and try again."
-          : error.message ||
-            "Request failed. If this is the live site, wait a moment and try again.";
-      showError(message);
+      showError(
+        error.message ||
+          "Request failed. Refresh the page, wait for the server to start, then try again."
+      );
     } finally {
       hideLoading();
     }
