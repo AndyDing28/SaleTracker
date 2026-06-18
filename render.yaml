@@ -3,7 +3,6 @@ services:
     name: sale-tracker
     runtime: python
     plan: free
-    rootDir: deprecated
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn --bind 0.0.0.0:$PORT --workers 1 app:app
     envVars:

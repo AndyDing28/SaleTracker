@@ -1,15 +1,9 @@
+flask==3.0.2
+flask-cors==4.0.0
+flask-limiter==3.5.0
+apscheduler==3.10.4
+gunicorn==21.2.0
 requests==2.31.0
 beautifulsoup4==4.12.3
 python-dotenv==1.0.1
-
-# For app
-schedule==1.2.1
-py2app==0.28.5
-
-# For web server
-# flask==3.0.2
-# flask-cors==4.0.0
-# flask-limiter==3.5.0
-# apscheduler==3.10.4
-# gunicorn==21.2.0 
-
+pip-system-certs==5.3

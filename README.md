@@ -1,163 +1,212 @@
-# Sale Tracker – Email Notifier
+# Sale Tracker
 
-A simple Python script that scrapes product prices from Lululemon and Nike, then sends combined daily email alerts to one or more recipients.
+Track product prices from **Nike** and **Lululemon** and get email alerts when prices change.
 
-This project can be packaged into standalone executables for both macOS (using `py2app`) and Linux (using `PyInstaller`).
+This repo has two parts:
+
+| Part | Location | What it does |
+|------|----------|--------------|
+| **Website** | Project root (`app.py`) | Web UI — paste a product link, get emailed updates |
+| **Email app** | `deprecated/` (`main.py`) | Background script — emails hardcoded products daily at 9 PM |
 
 ---
 
 ## Features
 
-* Scrapes product names and prices from Lululemon and Nike
-* Sends email alerts to a list of recipients once per day at 9 PM
-* Formats a combined email with prices and product links
-* Easily buildable into standalone executables for macOS and Linux
-* Deduplicates recipient emails to prevent duplicate notifications
+### Website (`app.py`)
+* Web form to track any Nike or Lululemon product URL
+* Scrapes name, price, image, and sale status
+* Sends HTML product-card emails
+* Schedules daily updates after you submit the form
+
+### Email app (`deprecated/main.py`)
+* Tracks predefined Lululemon and Nike links
+* Sends one combined email daily at **9:00 PM**
+* Can be packaged as a Mac `.app` (py2app) or Windows `.exe` (PyInstaller)
 
 ---
 
 ## Prerequisites
 
-* Python 3.8 or higher
-* macOS (for building `.app` with `py2app`) or Linux (for building executable with `PyInstaller`)
-* Gmail account (App Password required for sending emails)
-* Internet connection to access product pages
+* Python 3.8+
+* Gmail account with **App Password** enabled ([Google App Passwords](https://myaccount.google.com/apppasswords))
+* Internet access to product pages
 
 ---
 
-## Setup Instructions
+## Setup
 
-### 1. Clone the Repository
+### 1. Clone and enter the project
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/AndyDing28/SaleTracker.git
 cd SaleTracker
 ```
 
-### 2. Create and Activate a Virtual Environment
+### 2. Create a virtual environment
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate  # macOS/Linux
+**Windows (PowerShell):**
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 ```
 
-### 3. Install Dependencies
+**macOS / Linux:**
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
 
+### 3. Install dependencies
+
+**For the website:**
 ```bash
 pip install -r requirements.txt
 ```
 
-If not already included, install `py2app` manually:
-
+**For the email app:**
 ```bash
-pip install py2app
+pip install -r deprecated/requirements.txt
 ```
 
-### 4. Set Up Environment Variables
+On Windows, if HTTPS scraping fails with SSL errors:
+```bash
+pip install pip-system-certs
+```
 
-Copy the example environment file and configure your credentials:
+### 4. Configure environment variables
 
 ```bash
 cp .env.example .env
 ```
 
-Then edit the `.env` file with your actual credentials:
+Edit `.env` with your credentials:
 
 ```env
 SENDER_EMAIL=your-email@gmail.com
-EMAIL_PASSWORD=your-app-password
+EMAIL_PASSWORD=your-gmail-app-password
 RECIPIENT_EMAIL=recipient1@example.com
 RECIPIENT_EMAIL2=recipient2@example.com
 ```
 
-**Important**: For Gmail, you must enable 2-Step Verification and generate an App Password under Google Account > Security > App Passwords. Do not use your regular Gmail password.
+Use a Gmail **App Password**, not your regular password.
 
 ---
 
-## Running the Script (Dev Mode)
+## Running the website
 
-To test the email script directly:
+From the project root:
 
 ```bash
-python3 main.py
+python app.py
 ```
 
-This will begin checking prices and emailing once per day at 9:00 PM.
+Open **http://localhost:5000** in your browser.
 
-To stop it, press `Ctrl + C`.
+Stop the server with `Ctrl + C`.
 
-### Running with Environment Variables
+---
 
-You can also run the script with environment variables directly:
+## Running the email app
+
+From the project root:
 
 ```bash
-SENDER_EMAIL="your-email@gmail.com" \
-EMAIL_PASSWORD="your-app-password" \
-RECIPIENT_EMAIL="recipient@example.com" \
-RECIPIENT_EMAIL2="recipient2@example.com" \
-python3 main.py
+cd deprecated
+python main.py
+```
+
+Runs in the background and sends emails daily at **9:00 PM**.
+
+Optional — send immediately on startup. Add to `.env`:
+
+```env
+IMMEDIATE_SEND_ON_STARTUP=true
 ```
 
 ---
 
-## Building Standalone Executables
+## Supported stores
 
-### Building a macOS App
+| Store | Website | Email app |
+|-------|---------|-----------|
+| **Nike** | Yes | Yes |
+| **Lululemon** | Yes (may be blocked on some networks) | Yes |
 
-Use `py2app` to package the script into a `.app` file.
+---
 
-#### 1. Build the App
+## Deploying the website (Render)
+
+1. Push this repo to GitHub (do **not** commit `.env`).
+2. Go to [render.com](https://render.com) → **New Blueprint**.
+3. Connect the repo — Render reads `render.yaml` automatically.
+4. Set environment variables in the Render dashboard:
+   * `SENDER_EMAIL`
+   * `EMAIL_PASSWORD`
+5. Deploy — you'll get a public URL like `https://sale-tracker-xxxx.onrender.com`.
+
+---
+
+## Building standalone executables (email app)
+
+Run these from the `deprecated/` folder.
+
+### macOS (py2app)
 
 ```bash
-python3 setup.py py2app
+cd deprecated
+python setup.py py2app
 ```
 
-#### 2. Locate the Built App
+Output: `dist/main.app`
 
-After building, the `.app` will be located in the `dist/` directory:
-
-```
-dist/main.app
-```
-
-You can move this to `/Applications` or run it directly. It will run in the background and send emails daily.
-
-### Building a Linux Executable
-
-Use `PyInstaller` to create a standalone Linux executable.
-
-#### 1. Install PyInstaller
+### Windows (PyInstaller)
 
 ```bash
+cd deprecated
 pip install pyinstaller
-```
-
-#### 2. Build the Executable
-
-```bash
 pyinstaller --onefile --name sale-tracker main.py
 ```
 
-#### 3. Run the Executable
+Output: `dist/sale-tracker.exe`
 
-The executable will be created in the `dist/` directory:
+Copy `.env` into the same folder as the executable.
 
-```bash
-./dist/sale-tracker
+---
+
+## Project structure
+
 ```
-
-To run it in the background with environment variables:
-
-```bash
-nohup bash -c 'SENDER_EMAIL="your-email@gmail.com" EMAIL_PASSWORD="your-app-password" RECIPIENT_EMAIL="recipient@example.com" RECIPIENT_EMAIL2="recipient2@example.com" ./dist/sale-tracker' > sale-tracker.log 2>&1 &
+SaleTracker/
+├── app.py              # Flask website
+├── templates/          # Web UI HTML
+├── static/             # CSS, JS, images
+├── requirements.txt    # Website dependencies
+├── render.yaml         # Render deploy config
+├── Dockerfile
+├── .env.example
+└── deprecated/
+    ├── main.py         # Background email tracker
+    ├── setup.py        # py2app config
+    └── requirements.txt
 ```
 
 ---
 
 ## Security
 
-* **Never commit your `.env` file** to version control - it contains sensitive credentials
-* Use App Passwords instead of your main Gmail password
-* Do not hardcode credentials in the script
-* The `.env.example` file contains only placeholder values for reference
-* Keep your Gmail App Password secure and don't share it
+* Never commit `.env` — it contains Gmail credentials
+* Use Gmail App Passwords, not your main password
+* If the website is public, anyone can trigger emails through your form — use only for personal projects or add auth
+
+---
+
+## Files safe to delete
+
+These are build artifacts or OS junk, not source code:
+
+* `build/` — py2app build cache (recreated on rebuild)
+* `dist/` — compiled `.app` / `.exe` output
+* `.DS_Store` — macOS metadata (project root or `dist/`)
+* `deprecated/__pycache__/` — Python cache
+* `.venv/` — local virtualenv (recreate with `python -m venv .venv`)

@@ -1,0 +1,105 @@
+<!-- dependecies: style.css, script.js -->
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sales Tracker</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+    <link
+      rel="icon"
+      type="image/x-icon"
+      href="{{ url_for('static', filename='favicon.ico') }}"
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+
+  <body class="webpage">
+    <header class="header">
+      <div class="logo-text">SALES TRACKER</div>
+      <div class="dropdown">
+        <div class="about-us">
+          <span>ABOUT</span>
+        </div>
+        <div class="dropdown-content">
+          <a
+            class="linkedIn"
+            href="https://www.linkedin.com/in/siqi-ding-21b853236/"
+            target="_blank"
+            >Siqi Ding</a
+          >
+          <a
+            class="linkedIn"
+            href="https://www.linkedin.com/in/anthony--zhou/"
+            target="_blank"
+            >Anthony Zhou</a
+          >
+        </div>
+      </div>
+    </header>
+
+    <main class="main-content">
+      <div class="form-container">
+        <div class="welcome-content">
+          <h1>SALES TRACKER</h1>
+          <p class="subtitle">
+            Receive notifications when your desired items go on sale
+          </p>
+        </div>
+
+        <div
+          id="error-message"
+          class="message error"
+          style="display: none"
+        ></div>
+        <div
+          id="success-message"
+          class="message success"
+          style="display: none"
+        ></div>
+
+        <form id="combinedForm" class="premium-form">
+          <div class="form-group">
+            <label for="email">EMAIL</label>
+            <input
+              type="email"
+              id="email"
+              name="email"
+              required
+              placeholder="your@email.com"
+            />
+          </div>
+
+          <div class="form-group">
+            <label for="productLink">PRODUCT LINK</label>
+            <input
+              type="url"
+              id="productLink"
+              name="productLink"
+              required
+              placeholder="https://example.com/product"
+            />
+            <small class="help-text"
+              >Enter the full URL of the product you want to track</small
+            >
+          </div>
+
+          <button type="submit" class="submit-button">TRACK PRODUCT</button>
+        </form>
+      </div>
+    </main>
+
+    <button onclick="topFunction()" id="button" title="Go to top">↑</button>
+
+    <footer class="footer">
+      <p>&copy; 2025 SALES TRACKER</p>
+    </footer>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+  </body>
+</html>
