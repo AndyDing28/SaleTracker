@@ -119,7 +119,7 @@ document.addEventListener("DOMContentLoaded", function () {
           productDetails.on_sale && productDetails.original_price
             ? `Was ${productDetails.original_price} → Now ${productDetails.current_price} (On sale!)`
             : `Price: ${productDetails.price} · Not on sale`;
-        const successMessage = `Tracking started! Product: ${productDetails.name} ${priceLine} First email arriving shortly. Daily updates at 3:23 PM.`;
+        const successMessage = `Email sent! Product: ${productDetails.name} ${priceLine} Daily updates at 3:23 PM.`;
         showSuccess(successMessage);
         event.target.reset();
       } finally {

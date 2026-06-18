@@ -421,7 +421,12 @@ def track_product():
         product_state.details.clear()
         get_product_details(force_refresh=True)
 
-        send_email_background(recipient_email)
+        try:
+            send_email(recipient_email)
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 400
+        except Exception as e:
+            return jsonify({'error': f"Failed to send email: {str(e)}"}), 500
 
         if not scheduler.running:
             scheduler.add_job(
@@ -431,7 +436,7 @@ def track_product():
             scheduler.start()
 
         return jsonify({
-            'message': 'Product tracked! Check your inbox in a minute for the first update.',
+            'message': 'Email sent successfully and scheduled for daily updates',
             'product': public_product_details(),
         }), 200
     except Exception as e:
