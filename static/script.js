@@ -77,7 +77,7 @@ async function readJsonResponse(response) {
   if (!text) {
     if (response.status === 502 || response.status === 504) {
       throw new Error(
-        "Server timed out. Refresh the page, wait for 'Ready', then try again."
+        "Server timed out. Refresh the page, wait for the server to start, then try again."
       );
     }
     throw new Error("Empty response from server. Try again in a moment.");
@@ -104,6 +104,10 @@ async function warmUpServer() {
       throw new Error("Server not ready");
     }
     setServerStatus("", false);
+    const submitButton = document.querySelector('button[type="submit"]');
+    if (submitButton) {
+      submitButton.disabled = false;
+    }
   } catch {
     setServerStatus(
       "Server is still waking up — you can try submitting, or refresh in 30 seconds.",

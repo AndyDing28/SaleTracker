@@ -29,7 +29,7 @@ load_dotenv()
 
 # Render kills HTTP requests after ~30 seconds — one fast attempt, email runs in background
 if os.getenv("RENDER"):
-    FETCH_TIMEOUT = (5, 18)
+    FETCH_TIMEOUT = (5, 15)
     MAX_FETCH_RETRIES = 1
 else:
     FETCH_TIMEOUT = (10, 30)
@@ -297,7 +297,7 @@ def build_product_email_html(products):
     html_lines.append("</body></html>")
     return "\n".join(html_lines)
 
-def send_email(recipient_email, force_refresh=False):
+def send_email(recipient_email, force_refresh=False, product=None):
     """Send email with error handling"""
     try:
         sender_email = os.environ.get('SENDER_EMAIL')
@@ -309,8 +309,10 @@ def send_email(recipient_email, force_refresh=False):
         if not product_state.link:
             raise ValueError("Please set a product link first")
 
-        logger.info(f"Fetching product details for link: {product_state.link}")
-        product = get_product_details(force_refresh=force_refresh)
+        if product is None:
+            logger.info(f"Fetching product details for link: {product_state.link}")
+            product = get_product_details(force_refresh=force_refresh)
+        product = dict(product)
         product['link'] = product_state.link
 
         logger.info(f"Product details fetched: {product_state.details}")
@@ -324,7 +326,7 @@ def send_email(recipient_email, force_refresh=False):
         message.attach(MIMEText(html_body, 'html'))
 
         logger.info(f"Attempting to send email to {recipient_email}")
-        with smtplib.SMTP('smtp.gmail.com', 587) as server:
+        with smtplib.SMTP('smtp.gmail.com', 587, timeout=15) as server:
             server.starttls()
             server.login(sender_email, sender_password)
             server.send_message(message)
@@ -356,8 +358,8 @@ def _track_product_background(recipient_email, product_link):
     try:
         product_state.link = product_link
         product_state.details.clear()
-        get_product_details(force_refresh=True)
-        send_email(recipient_email)
+        product = get_product_details(force_refresh=True)
+        send_email(recipient_email, product=product)
         if not scheduler.running:
             scheduler.add_job(
                 send_email, 'cron', hour=15, minute=23,
@@ -434,7 +436,6 @@ def track_product():
         if not product_link or not validate_url(product_link):
             return jsonify({'error': 'Invalid product link'}), 400
 
-        # Render free tier kills requests after ~30s — respond immediately, finish in background
         if os.getenv("RENDER"):
             threading.Thread(
                 target=_track_product_background,
@@ -443,17 +444,17 @@ def track_product():
             ).start()
             return jsonify({
                 'message': (
-                    'Tracking started! Check your inbox in 1–2 minutes for the first update.'
+                    'Tracking started! Email may take 1–3 minutes on free hosting.'
                 ),
                 'async': True,
             }), 202
 
         product_state.link = product_link
         product_state.details.clear()
-        get_product_details(force_refresh=True)
+        product = get_product_details(force_refresh=True)
 
         try:
-            send_email(recipient_email)
+            send_email(recipient_email, product=product)
         except ValueError as e:
             return jsonify({'error': str(e)}), 400
         except Exception as e:
