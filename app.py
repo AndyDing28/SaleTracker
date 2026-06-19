@@ -56,6 +56,7 @@ class ProductState:
         self.details = {}
 
 product_state = ProductState()
+state_lock = threading.Lock()
 
 REQUEST_HEADERS = {
     "User-Agent": (
@@ -79,7 +80,6 @@ def fetch_product_page(url):
     for attempt in range(1, MAX_FETCH_RETRIES + 1):
         try:
             response = session.get(url, timeout=FETCH_TIMEOUT)
-            response.raise_for_status()
             return response
         except (requests.Timeout, requests.ConnectionError) as e:
             last_error = e
@@ -148,50 +148,112 @@ def _nike_prices_from_offers(offers):
     original_price = offers.get("compareAtPrice") or offers.get("wasPrice")
     return price, original_price
 
+def _nike_sku_from_url(url):
+    match = re.search(r"/([A-Z0-9-]+)$", url.rstrip("/"), re.I)
+    return match.group(1).upper() if match else None
+
+def _nike_variant_matches_url(variant, url, normalized_url):
+    offer_url = variant.get("offers", {}).get("url", "").rstrip("/")
+    if normalized_url in offer_url or offer_url in normalized_url:
+        return True
+    sku = _nike_sku_from_url(url)
+    if not sku:
+        return False
+    variant_sku = (variant.get("sku") or variant.get("mpn") or "").upper()
+    return sku == variant_sku or offer_url.upper().endswith(sku)
+
+def parse_nike_next_data(soup):
+    """Fallback parser using Nike's embedded page data."""
+    script = soup.find("script", id="__NEXT_DATA__")
+    if not script:
+        return None
+
+    selected = json.loads(script.string).get("props", {}).get("pageProps", {}).get("selectedProduct")
+    if not selected:
+        return None
+
+    info = selected.get("productInfo", {})
+    prices = selected.get("prices", {})
+    current = prices.get("currentPrice")
+    if current is None:
+        return None
+
+    name = info.get("fullTitle") or info.get("title", "Product")
+    image = ""
+    images = selected.get("contentImages") or []
+    if images:
+        image = images[0].get("properties", {}).get("squarish", {}).get("url", "")
+
+    initial = prices.get("initialPrice")
+    original = initial if initial and initial != current else None
+    return _nike_product(name, current, image, original)
+
 def parse_nike(soup, url):
-    json_ld = soup.find("script", type="application/ld+json")
-    if not json_ld:
+    scripts = soup.find_all("script", type="application/ld+json")
+    if not scripts:
         raise ValueError("Product data not found on Nike page")
 
-    data = json.loads(json_ld.string)
-    items = data if isinstance(data, list) else [data]
     normalized_url = url.rstrip("/")
-    image_element = soup.find('meta', property='og:image')
-    image = image_element.get('content', '') if image_element else ''
+    sku = _nike_sku_from_url(url)
+    image_element = soup.find("meta", property="og:image")
+    image = image_element.get("content", "") if image_element else ""
 
-    for item in items:
-        if item.get("@type") == "ProductGroup":
-            name = item.get("name", "Product name not found")
-            variants = item.get("hasVariant") or []
+    for script in scripts:
+        data = json.loads(script.string)
+        items = data if isinstance(data, list) else [data]
 
-            for variant in variants:
-                offer_url = variant.get("offers", {}).get("url", "").rstrip("/")
-                if normalized_url in offer_url or offer_url in normalized_url:
+        for item in items:
+            if item.get("@type") == "ProductGroup":
+                name = item.get("name", "Product name not found")
+                variants = item.get("hasVariant") or []
+
+                for variant in variants:
+                    if not _nike_variant_matches_url(variant, url, normalized_url):
+                        continue
                     price, original_price = _nike_prices_from_offers(variant.get("offers", {}))
                     if price is not None:
                         return _nike_product(
                             name, price, variant.get("image") or image, original_price
                         )
 
-            for variant in variants:
-                price, original_price = _nike_prices_from_offers(variant.get("offers", {}))
-                if price is not None:
-                    return _nike_product(
-                        name, price, variant.get("image") or image, original_price
+                if sku:
+                    raise ValueError(
+                        f"Could not find color/style {sku} on this Nike page. "
+                        "Open the exact product in your browser and copy the full URL."
                     )
 
-        if item.get("@type") == "Product":
-            name = item.get("name", "Product name not found")
-            price, original_price = _nike_prices_from_offers(item.get("offers", {}))
-            if price is not None:
-                return _nike_product(name, price, item.get("image") or image, original_price)
+            if item.get("@type") == "Product":
+                name = item.get("name", "Product name not found")
+                price, original_price = _nike_prices_from_offers(item.get("offers", {}))
+                if price is not None:
+                    return _nike_product(name, price, item.get("image") or image, original_price)
 
     raise ValueError("Price not found on Nike page")
 
 def parse_product_details(url, soup):
     if "nike.com" in url:
-        return parse_nike(soup, url)
+        try:
+            return parse_nike(soup, url)
+        except ValueError as e:
+            if "Could not find color/style" in str(e):
+                raise
+            product = parse_nike_next_data(soup)
+            if product:
+                return product
+            raise
     return parse_lululemon(soup)
+
+def fetch_and_parse_product(url):
+    """Fetch and parse a product URL without relying on global state."""
+    response = fetch_product_page(url)
+    if response.status_code == 404:
+        raise ValueError(
+            "Product not found on Nike. Open the product in your browser "
+            "and copy the full URL from the address bar."
+        )
+    response.raise_for_status()
+    soup = BeautifulSoup(response.content, "html.parser")
+    return parse_product_details(url, soup)
 
 def get_product_details(force_refresh=False):
     """Fetch and parse product details. Returns a product dict."""
@@ -213,6 +275,12 @@ def get_product_details(force_refresh=False):
             }
 
         response = fetch_product_page(product_state.link)
+        if response.status_code == 404:
+            raise ValueError(
+                "Product not found on Nike. Open the product in your browser "
+                "and copy the full URL from the address bar."
+            )
+        response.raise_for_status()
         soup = BeautifulSoup(response.content, 'html.parser')
         product = parse_product_details(product_state.link, soup)
         product_state.details = {
@@ -297,7 +365,7 @@ def build_product_email_html(products):
     html_lines.append("</body></html>")
     return "\n".join(html_lines)
 
-def send_email(recipient_email, force_refresh=False, product=None):
+def send_email(recipient_email, force_refresh=False, product=None, product_link=None):
     """Send email with error handling"""
     try:
         sender_email = os.environ.get('SENDER_EMAIL')
@@ -306,14 +374,17 @@ def send_email(recipient_email, force_refresh=False, product=None):
         if not sender_email or not sender_password:
             raise ValueError("Email credentials not properly configured")
 
-        if not product_state.link:
+        link = (product_link or product_state.link or "").strip()
+        if not link:
             raise ValueError("Please set a product link first")
 
         if product is None:
-            logger.info(f"Fetching product details for link: {product_state.link}")
-            product = get_product_details(force_refresh=force_refresh)
+            logger.info(f"Fetching product details for link: {link}")
+            with state_lock:
+                product_state.link = link
+                product = get_product_details(force_refresh=force_refresh)
         product = dict(product)
-        product['link'] = product_state.link
+        product['link'] = link
 
         logger.info(f"Product details fetched: {product_state.details}")
 
@@ -356,19 +427,29 @@ def send_email_background(recipient_email, force_refresh=False):
 def _track_product_background(recipient_email, product_link):
     """Scrape, email, and schedule — runs after an immediate 202 on Render."""
     try:
-        product_state.link = product_link
-        product_state.details.clear()
-        product = get_product_details(force_refresh=True)
-        send_email(recipient_email, product=product)
-        if not scheduler.running:
-            scheduler.add_job(
-                send_email, 'cron', hour=15, minute=23,
-                kwargs={'recipient_email': recipient_email, 'force_refresh': True},
-            )
-            scheduler.start()
-        logger.info(f"Background track complete for {recipient_email}")
+        with state_lock:
+            logger.info(f"Background track started for {product_link}")
+            product = fetch_and_parse_product(product_link)
+            product_state.link = product_link
+            product_state.details = {
+                **product,
+                "price": product["current_price"],
+                "_cached_link": product_link,
+            }
+            send_email(recipient_email, product=product, product_link=product_link)
+            if not scheduler.running:
+                scheduler.add_job(
+                    send_email, 'cron', hour=15, minute=23,
+                    kwargs={
+                        'recipient_email': recipient_email,
+                        'force_refresh': True,
+                        'product_link': product_link,
+                    },
+                )
+                scheduler.start()
+        logger.info(f"Background track complete for {recipient_email}: {product['name']}")
     except Exception as e:
-        logger.error(f"Background track failed for {recipient_email}: {e}")
+        logger.error(f"Background track failed for {recipient_email} ({product_link}): {e}")
 
 @app.route('/')
 def home():
@@ -449,12 +530,17 @@ def track_product():
                 'async': True,
             }), 202
 
-        product_state.link = product_link
-        product_state.details.clear()
-        product = get_product_details(force_refresh=True)
+        with state_lock:
+            product = fetch_and_parse_product(product_link)
+            product_state.link = product_link
+            product_state.details = {
+                **product,
+                "price": product["current_price"],
+                "_cached_link": product_link,
+            }
 
         try:
-            send_email(recipient_email, product=product)
+            send_email(recipient_email, product=product, product_link=product_link)
         except ValueError as e:
             return jsonify({'error': str(e)}), 400
         except Exception as e:
