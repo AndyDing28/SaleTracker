@@ -440,6 +440,33 @@ def send_email(recipient_email, force_refresh=False, product=None, product_link=
         logger.error(f"Error sending email: {str(e)}")
         raise ValueError(f"Unexpected error: {str(e)}")
 
+def send_test_email(recipient_email):
+    """Send a plain test email — no scraping."""
+    sender_email = os.environ.get('SENDER_EMAIL')
+    sender_password = os.environ.get('EMAIL_PASSWORD')
+
+    if not sender_email or not sender_password:
+        raise ValueError("Email credentials not properly configured")
+
+    message = MIMEMultipart()
+    message['From'] = sender_email
+    message['To'] = recipient_email
+    message['Subject'] = 'Sale Tracker – test email'
+    message.attach(MIMEText(
+        "This is a test email from Sale Tracker.\n\n"
+        "If you received this, Gmail SMTP is working on the server. "
+        "No product page was scraped.",
+        'plain',
+    ))
+
+    logger.info(f"Sending test email to {recipient_email}")
+    with smtplib.SMTP('smtp.gmail.com', 587, timeout=15) as server:
+        server.starttls()
+        server.login(sender_email, sender_password)
+        server.send_message(message)
+    logger.info(f"Test email sent successfully to {recipient_email}")
+    return True
+
 def send_email_background(recipient_email, force_refresh=False):
     """Send email without blocking the HTTP response (Render 30s limit)."""
     def _run():
@@ -494,7 +521,32 @@ def home():
 @app.route('/health')
 def health_check():
     """Health check endpoint"""
-    return jsonify({'status': 'healthy'}), 200
+    return jsonify({
+        'status': 'healthy',
+        'email_configured': bool(
+            os.environ.get('SENDER_EMAIL') and os.environ.get('EMAIL_PASSWORD')
+        ),
+    }), 200
+
+@app.route('/test-email', methods=['POST'])
+@limiter.limit("3 per hour")
+def test_email():
+    """Send a test email without scraping (verify SMTP on Render)."""
+    try:
+        data = request.get_json() or {}
+        recipient_email = data.get('recipient_email')
+        if not recipient_email or not validate_email(recipient_email):
+            return jsonify({'error': 'Invalid email address'}), 400
+
+        send_test_email(recipient_email)
+        return jsonify({
+            'message': f'Test email sent to {recipient_email}. Check inbox and spam.',
+        }), 200
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        logger.error(f"Test email failed: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/schedule-email', methods=['POST'])
 @limiter.limit("5 per minute")
