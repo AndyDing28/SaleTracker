@@ -150,10 +150,10 @@ document.addEventListener("DOMContentLoaded", function () {
 
       if (response.status === 202 || data.async) {
         const productLine = data.product
-          ? ` Product: ${data.product.name} (${data.product.price || data.product.current_price}).`
+          ? ` Product: ${data.product.name}.`
           : "";
         showSuccess(
-          `${data.message}${productLine} Daily updates at 3:23 PM. Check spam if needed.`
+          `${data.message}${productLine} Daily updates at 9 AM. Check spam if needed.`
         );
         event.target.reset();
         return;

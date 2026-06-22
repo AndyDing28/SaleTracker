@@ -457,7 +457,7 @@ def _send_tracked_email(recipient_email, product_link, product):
         with state_lock:
             if not scheduler.running:
                 scheduler.add_job(
-                    send_email, 'cron', hour=15, minute=23,
+                    send_email, 'cron', hour=9, minute=00,
                     kwargs={
                         'recipient_email': recipient_email,
                         'force_refresh': True,
