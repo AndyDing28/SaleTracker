@@ -217,6 +217,9 @@ def parse_nike(soup, url):
                         )
 
                 if sku:
+                    product = parse_nike_next_data(soup)
+                    if product:
+                        return product
                     raise ValueError(
                         f"Could not find color/style {sku} on this Nike page. "
                         "Open the exact product in your browser and copy the full URL."
@@ -424,19 +427,11 @@ def send_email_background(recipient_email, force_refresh=False):
 
     threading.Thread(target=_run, daemon=False).start()
 
-def _track_product_background(recipient_email, product_link):
-    """Scrape, email, and schedule — runs after an immediate 202 on Render."""
+def _send_tracked_email(recipient_email, product_link, product):
+    """Send email and schedule daily updates (runs in background on Render)."""
     try:
+        send_email(recipient_email, product=product, product_link=product_link)
         with state_lock:
-            logger.info(f"Background track started for {product_link}")
-            product = fetch_and_parse_product(product_link)
-            product_state.link = product_link
-            product_state.details = {
-                **product,
-                "price": product["current_price"],
-                "_cached_link": product_link,
-            }
-            send_email(recipient_email, product=product, product_link=product_link)
             if not scheduler.running:
                 scheduler.add_job(
                     send_email, 'cron', hour=15, minute=23,
@@ -447,6 +442,23 @@ def _track_product_background(recipient_email, product_link):
                     },
                 )
                 scheduler.start()
+        logger.info(f"Email sent for {recipient_email}: {product['name']}")
+    except Exception as e:
+        logger.error(f"Background email failed for {recipient_email} ({product_link}): {e}")
+
+def _track_product_background(recipient_email, product_link):
+    """Legacy wrapper — scrape then email (used if product not pre-fetched)."""
+    try:
+        logger.info(f"Background track started for {product_link}")
+        product = fetch_and_parse_product(product_link)
+        with state_lock:
+            product_state.link = product_link
+            product_state.details = {
+                **product,
+                "price": product["current_price"],
+                "_cached_link": product_link,
+            }
+        _send_tracked_email(recipient_email, product_link, product)
         logger.info(f"Background track complete for {recipient_email}: {product['name']}")
     except Exception as e:
         logger.error(f"Background track failed for {recipient_email} ({product_link}): {e}")
@@ -518,16 +530,28 @@ def track_product():
             return jsonify({'error': 'Invalid product link'}), 400
 
         if os.getenv("RENDER"):
+            product = fetch_and_parse_product(product_link)
+            with state_lock:
+                product_state.link = product_link
+                product_state.details = {
+                    **product,
+                    "price": product["current_price"],
+                    "_cached_link": product_link,
+                }
             threading.Thread(
-                target=_track_product_background,
-                args=(recipient_email, product_link),
+                target=_send_tracked_email,
+                args=(recipient_email, product_link, product),
                 daemon=False,
             ).start()
             return jsonify({
                 'message': (
-                    'Tracking started! Email may take 1–3 minutes on free hosting.'
+                    f"Tracking {product['name']}! Email arriving in 1–2 minutes."
                 ),
                 'async': True,
+                'product': {
+                    **product,
+                    'price': product['current_price'],
+                },
             }), 202
 
         with state_lock:
@@ -549,7 +573,11 @@ def track_product():
         if not scheduler.running:
             scheduler.add_job(
                 send_email, 'cron', hour=15, minute=23,
-                kwargs={'recipient_email': recipient_email, 'force_refresh': True},
+                kwargs={
+                    'recipient_email': recipient_email,
+                    'force_refresh': True,
+                    'product_link': product_link,
+                },
             )
             scheduler.start()
 

@@ -149,8 +149,11 @@ document.addEventListener("DOMContentLoaded", function () {
       const data = await readJsonResponse(response);
 
       if (response.status === 202 || data.async) {
+        const productLine = data.product
+          ? ` Product: ${data.product.name} (${data.product.price || data.product.current_price}).`
+          : "";
         showSuccess(
-          `${data.message} Daily updates at 3:23 PM. Check spam if you don't see it.`
+          `${data.message}${productLine} Daily updates at 3:23 PM. Check spam if needed.`
         );
         event.target.reset();
         return;
