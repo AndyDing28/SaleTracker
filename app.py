@@ -162,6 +162,28 @@ def _nike_variant_matches_url(variant, url, normalized_url):
     variant_sku = (variant.get("sku") or variant.get("mpn") or "").upper()
     return sku == variant_sku or offer_url.upper().endswith(sku)
 
+def _enrich_nike_sale_from_next_data(soup, product):
+    """JSON-LD often omits the original price — read it from Nike's page data."""
+    script = soup.find("script", id="__NEXT_DATA__")
+    if not script:
+        return product
+
+    selected = json.loads(script.string).get("props", {}).get("pageProps", {}).get("selectedProduct")
+    if not selected:
+        return product
+
+    prices = selected.get("prices", {})
+    current = prices.get("currentPrice")
+    initial = prices.get("initialPrice")
+    if current is None or initial is None or initial <= current:
+        return product
+
+    enriched = dict(product)
+    enriched["current_price"] = f"${current} USD"
+    enriched["original_price"] = f"${initial} USD"
+    enriched["on_sale"] = True
+    return enriched
+
 def parse_nike_next_data(soup):
     """Fallback parser using Nike's embedded page data."""
     script = soup.find("script", id="__NEXT_DATA__")
@@ -236,7 +258,8 @@ def parse_nike(soup, url):
 def parse_product_details(url, soup):
     if "nike.com" in url:
         try:
-            return parse_nike(soup, url)
+            product = parse_nike(soup, url)
+            return _enrich_nike_sale_from_next_data(soup, product)
         except ValueError as e:
             if "Could not find color/style" in str(e):
                 raise
@@ -331,8 +354,8 @@ def email_subject_for_product(product):
     if product.get('on_sale') and product.get('original_price'):
         current = product['current_price'].replace('USD', '').strip()
         original = product['original_price'].replace('USD', '').strip()
-        return f"{current} / {original} – Your Tracked Products"
-    return f"{product['current_price'].replace('USD', '').strip()} – Your Tracked Products"
+        return f"{current} / {original} – Your Tracked Product is on sale"
+    return f"{product['current_price'].replace('USD', '').strip()} – Your Tracked Product"
 
 def build_product_email_html(products):
     """Build HTML email body with product cards."""
